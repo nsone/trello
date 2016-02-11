@@ -14,6 +14,7 @@ Commands:
 import datetime
 import os
 import sqlite3
+import sys
 import pprint
 
 from bson import ObjectId
@@ -33,7 +34,11 @@ class Sprint(NS1Base):
         self.last_sprint_start = None
         self.next_sprint_start = None
         self.cur_sprint_start = None
+        self.last_sprint_id = None
+        self.next_sprint_id = None
+        self.cur_sprint_id = None
         self.date_pretend = None
+        self.list_ids = {}
 
     def boot(self):
         super(Sprint, self).boot()
@@ -47,7 +52,8 @@ class Sprint(NS1Base):
         c.execute('''create table if not exists lists (list_id text pimary key, name text)''')
         c.execute('''create table if not exists cards (card_id text primary key, create_date text, '''
                   '''sprint_add_date text, due_date text, labels text, name text)''')
-        c.execute('''create table if not exists sprints (sprint_id text primary key, start_date text, end_date text)''')
+        c.execute('''create table if not exists sprints (sprint_id text primary key, start_date text, '''
+                  '''end_date text, started integer, prepared integer, finished integer)''')
         c.execute('''create table if not exists sprint_state (sprint_id text, list_id text, card_id text,'''
                   ''' snapshot_phase integer, from_roadmap integer)''')
         c.execute('''create unique index if not exists sprint_idx on sprint_state (sprint_id, list_id, '''
@@ -57,22 +63,27 @@ class Sprint(NS1Base):
 
     def populate_tables(self):
         c = self._db.cursor()
-        c.execute('''select count(*) from lists''')
-        lc = c.fetchone()
-        if (lc[0] == 0):
+        c.execute('''select * from lists''')
+        lc = c.fetchall()
+        if len(lc) == 0:
             # populate the lists
             board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
             lists = board.open_lists()
             for l in lists:
                 c.execute('''insert into lists values (?, ?)''', (l.id, l.name))
+                self.list_ids[l.name] = l.id
+        else:
+            self.list_ids = {l[1]: l[0] for l in lc}
         # make sure this and next sprint are in sprints table
-        c.execute('''insert or ignore into sprints values (?, ?, ?)''', (self.cur_sprint_start.date(),
-                                                                         self.cur_sprint_start,
-                                                                         self.next_sprint_start -
-                                                                         datetime.timedelta(days=1)))
-        c.execute('''insert or ignore into sprints values (?, ?, ?)''', (self.next_sprint_start.date(),
-                                                                         self.next_sprint_start,
-                                                                         self.next_weekday(self.next_sprint_start, 0)))
+        c.execute('''insert or ignore into sprints values (?, ?, ?, 0, 0, 0)''',
+                  (self.cur_sprint_id,
+                   self.cur_sprint_start,
+                   self.next_sprint_start -
+                   datetime.timedelta(days=1)))
+        c.execute('''insert or ignore into sprints values (?, ?, ?, 0, 0, 0)''',
+                  (self.next_sprint_id,
+                   self.next_sprint_start,
+                   self.next_weekday(self.next_sprint_start, 0)))
         self._db.commit()
         c.close()
 
@@ -96,6 +107,9 @@ class Sprint(NS1Base):
 
         self.next_sprint_start = self.next_weekday(self.today, 1)
         self.last_sprint_start = self.next_weekday(self.cur_sprint_start - datetime.timedelta(days=8), 1)
+        self.last_sprint_id = str(self.last_sprint_start.date())
+        self.next_sprint_id = str(self.next_sprint_start.date())
+        self.cur_sprint_id = str(self.cur_sprint_start.date())
 
     def show(self):
         board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
@@ -117,28 +131,60 @@ class Sprint(NS1Base):
         # self._db.commit()
         c.close()
 
-    def capture_sprint(self, snapshot_phase):
+    def capture_sprint(self, sprint_id, snapshot_phase):
         board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
         cards = board.open_cards()
         c = self._db.cursor()
         # make sure cards exist
-        for c in cards:
-            self.write_card(c)
+        for card in cards:
+            self.write_card(card)
             # write them to state
             c.execute('''insert into sprint_state values (?, ?, ?, ?, ?)''',
-                      (self.cur_sprint_start, ))
-
-        self._db.commit()
+                      (sprint_id.date(), card.list_id, card.id, snapshot_phase, 0))
         c.close()
 
+    def get_sprint_flag(self, sprint_id, name):
+        c = self._db.cursor()
+        c.execute('''select %s from sprints where sprint_id=?''' % name, (sprint_id,))
+        if c.rowcount != 1:
+            raise Exception("Problem: can't pull finished flag")
+        flag = c.fetchone()
+        c.close()
+        return flag
+
+    def set_sprint_flag(self, sprint_id, name):
+        c = self._db.cursor()
+        c.execute('''update sprints set %s=1 where sprint_id=?''' % name, (sprint_id,))
+        c.close()
 
     def finish_sprint(self):
+
+        print "Finishing Sprint %s" % self.last_sprint_id
+
+        finished = self.get_sprint_flag(self.last_sprint_id, 'finished')
+        if finished == 1:
+            raise Exception("Sprint has already been finished, aborting")
+
         # outgoing sprint: snapshot_phase=2 (finish)
         ## capture sprint board state to sqlite (end)
-        self.capture_sprint(snapshot_phase=2)
-        ## archive everything in Done column
+        try:
+            self.capture_sprint(self.last_sprint_start, snapshot_phase=2)
+        except Exception as e:
+            print "ROLLING BACK"
+            self._db.rollback()
+            raise e
+        self.set_sprint_flag('finished')
+        self._db.commit()
 
-        pass
+        ## archive everything in Done column
+        board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
+        done_list = board.get_list(self.list_ids['Done'])
+        done_cards = done_list.list_cards()
+        for card in done_cards:
+            if not card.closed:
+                print "Closing Done ticket: %s" % card.name
+                card.set_closed(True)
+
 
     def prep_sprint(self):
         # incoming sprint: snapshot_phase=1 (start), from_roadmap=1
@@ -151,8 +197,7 @@ class Sprint(NS1Base):
         # incoming sprint: snapshot_phase=1 (start), from_roadmap=0
         ## run after prep and after any manual tickets have been added, to capture sprint start
         ## capture sprint board state to sqlite (start)
-        self.capture_sprint(snapshot_phase=1)
-        pass
+        self.capture_sprint(self.cur_sprint_start, snapshot_phase=1)
 
     def backup(self):
         # send to s3
@@ -188,7 +233,7 @@ if __name__ == "__main__":
 
     if args['<command>'] == 'which':
         print "Today is: %s, Current Sprint is: %s, Next Sprint is %s, Last Sprint is: %s" % \
-              (t.today, t.cur_sprint_start, t.next_sprint_start, t.last_sprint_start)
+              (t.today.date(), t.cur_sprint_id, t.next_sprint_id, t.last_sprint_id)
     elif args['<command>'] == 'show':
         t.show()
     elif args['<command>'] == 'finish':
