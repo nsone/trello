@@ -13,7 +13,9 @@ Commands:
 import datetime
 import os
 import sqlite3
+import pprint
 
+from bson import ObjectId
 from docopt import docopt
 
 from ns1trellobase import NS1Base
@@ -26,8 +28,8 @@ class Sprint(NS1Base):
         super(Sprint, self).__init__()
         self._db_name = dbname
         self.today = None
-        self.next_tue = None
-        self.last_tue = None
+        self.next_sprint_start = None
+        self.last_sprint_start = None
 
     def boot(self):
         super(Sprint, self).boot()
@@ -39,13 +41,13 @@ class Sprint(NS1Base):
     def create_tables(self):
         c = self._db.cursor()
         c.execute('''create table if not exists lists (list_id text pimary key, name text)''')
-        c.execute('''create table if not exists cards (card_id text primary key, add_date text, due_date text,'''
-                  '''labels text, title text)''')
+        c.execute('''create table if not exists cards (card_id text primary key, create_date text, '''
+                  '''sprint_add_date text, due_date text, labels text, name text)''')
         c.execute('''create table if not exists sprints (sprint_id text primary key, start_date text, end_date text)''')
         c.execute('''create table if not exists sprint_state (sprint_id text, list_id text, card_id text,'''
-                  ''' snapshot_time integer, from_roadmap integer)''')
+                  ''' snapshot_phase integer, from_roadmap integer)''')
         c.execute('''create unique index if not exists sprint_idx on sprint_state (sprint_id, list_id, '''
-                  '''card_id, snapshot_time)''')
+                  '''card_id, snapshot_phase)''')
         self._db.commit()
         c.close()
 
@@ -60,12 +62,12 @@ class Sprint(NS1Base):
             for l in lists:
                 c.execute('''insert into lists values (?, ?)''', (l.id, l.name))
         # make sure this and next sprint are in sprints table
-        c.execute('''insert or replace into sprints values (?, ?, ?)''', (self.last_tue,
-                                                                          self.last_tue,
-                                                                          self.next_tue-datetime.timedelta(days=1)))
-        c.execute('''insert or replace into sprints values (?, ?, ?)''', (self.next_tue,
-                                                                          self.next_tue,
-                                                                          self.next_weekday(self.next_tue, 0)))
+        c.execute('''insert or ignore into sprints values (?, ?, ?)''', (self.last_sprint_start,
+                                                                         self.last_sprint_start,
+                                                                         self.next_sprint_start - datetime.timedelta(days=1)))
+        c.execute('''insert or ignore into sprints values (?, ?, ?)''', (self.next_sprint_start,
+                                                                         self.next_sprint_start,
+                                                                         self.next_weekday(self.next_sprint_start, 0)))
         self._db.commit()
         c.close()
 
@@ -77,9 +79,9 @@ class Sprint(NS1Base):
         return d + datetime.timedelta(days_ahead)
 
     def determine_sprint(self):
-        self.today = datetime.date.today()
-        self.next_tue = self.next_weekday(self.today, 1)
-        self.last_tue = self.next_weekday(self.today - datetime.timedelta(days=8), 1)
+        self.today = datetime.datetime.today()
+        self.next_sprint_start = self.next_weekday(self.today, 1)
+        self.last_sprint_start = self.next_weekday(self.today - datetime.timedelta(days=8), 1)
 
     def show(self):
         board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
@@ -90,21 +92,48 @@ class Sprint(NS1Base):
             list_map[l.name] = [c.name for c in cards]
         print list_map
 
-    def start(self):
-        # MODE 1 outgoing/incoming
-        # outgoing sprint
+    def write_card(self, card):
+        card.fetch()
+        # pprint.pprint(vars(card))
+        c = self._db.cursor()
+        labels = [l.name for l in card.labels]
+        create_date = ObjectId(card.id).generation_time
+        c.execute('''insert or ignore into cards values (?, ?, ?, ?, ?, ?)''',
+                  (card.id, create_date, self.today.isoformat(' '), card.due_date, ','.join(labels), card.name))
+        self._db.commit()
+        c.close()
+
+    def capture_sprint(self, snapshot_phase):
+        board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
+        cards = board.open_cards()
+        for c in cards:
+            self.write_card(c)
+            
+
+    def finish_sprint(self):
+        # outgoing sprint: snapshot_phase=2 (finish)
         ## capture sprint board state to sqlite (end)
+        self.capture_sprint(snapshot_phase=2)
         ## archive everything in Done column
-        # incoming sprint
-        ## change title to todays date
-        ## right shift sprint roadmap, bring into current sprint
-        ## capture tickets coming in from roadmap (so we can figure out which were added ad hoc after sprint start)
 
         pass
 
-    def finish(self):
-        # MODE 2 new sprint ready
+    def prep_sprint(self):
+        # incoming sprint: snapshot_phase=1 (start), from_roadmap=1
+        ## change title to todays date
+        ## right shift sprint roadmap, bring into current sprint
+        ## capture tickets coming in from roadmap (so we can figure out which were added ad hoc after sprint start)
+        pass
+
+    def start_sprint(self):
+        # incoming sprint: snapshot_phase=1 (start), from_roadmap=0
+        ## run after prep and after any manual tickets have been added, to capture sprint start
         ## capture sprint board state to sqlite (start)
+        self.capture_sprint(snapshot_phase=1)
+        pass
+
+    def backup(self):
+        # send to s3
         pass
 
     def report(self):
@@ -134,12 +163,16 @@ if __name__ == "__main__":
     t.boot()
 
     if args['<command>'] == 'which':
-        print "Today is: %s, Current Tue is: %s, Next Tue is: %s" % (t.today, t.last_tue, t.next_tue)
+        print "Today is: %s, Current Tue is: %s, Next Tue is: %s" % (t.today, t.last_sprint_start, t.next_sprint_start)
     elif args['<command>'] == 'show':
         t.show()
     elif args['<command>'] == 'finish':
-        t.finish()
+        t.finish_sprint()
+    elif args['<command>'] == 'prep':
+        t.prep_sprint()
     elif args['<command>'] == 'start':
-        t.start()
+        t.start_sprint()
+    elif args['<command>'] == 'backup':
+        t.backup()
 
 
