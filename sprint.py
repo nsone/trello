@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 """
-usage: sprint.py [--db <db>] [<command>] [<args>...]
+usage: sprint.py [--db <db>] [--pretend <date>] [<command>] [<args>...]
 
 Options:
-    --db <db>    Where to find the sqlite db.
+    --db <db>         Where to find the sqlite db.
+    --pretend <date>  Pretend today is date
 
 Commands:
     show    Show status of current sprint
@@ -26,14 +27,17 @@ class Sprint(NS1Base):
 
     def __init__(self, dbname):
         super(Sprint, self).__init__()
+        self._db = None
         self._db_name = dbname
         self.today = None
-        self.next_sprint_start = None
         self.last_sprint_start = None
+        self.next_sprint_start = None
+        self.cur_sprint_start = None
+        self.date_pretend = None
 
     def boot(self):
         super(Sprint, self).boot()
-        self.determine_sprint()
+        self.determine_sprint(self.date_pretend)
         self._db = sqlite3.connect(self._db_name)
         self.create_tables()
         self.populate_tables()
@@ -62,10 +66,11 @@ class Sprint(NS1Base):
             for l in lists:
                 c.execute('''insert into lists values (?, ?)''', (l.id, l.name))
         # make sure this and next sprint are in sprints table
-        c.execute('''insert or ignore into sprints values (?, ?, ?)''', (self.last_sprint_start,
-                                                                         self.last_sprint_start,
-                                                                         self.next_sprint_start - datetime.timedelta(days=1)))
-        c.execute('''insert or ignore into sprints values (?, ?, ?)''', (self.next_sprint_start,
+        c.execute('''insert or ignore into sprints values (?, ?, ?)''', (self.cur_sprint_start.date(),
+                                                                         self.cur_sprint_start,
+                                                                         self.next_sprint_start -
+                                                                         datetime.timedelta(days=1)))
+        c.execute('''insert or ignore into sprints values (?, ?, ?)''', (self.next_sprint_start.date(),
                                                                          self.next_sprint_start,
                                                                          self.next_weekday(self.next_sprint_start, 0)))
         self._db.commit()
@@ -78,10 +83,19 @@ class Sprint(NS1Base):
             days_ahead += 7
         return d + datetime.timedelta(days_ahead)
 
-    def determine_sprint(self):
-        self.today = datetime.datetime.today()
+    def determine_sprint(self, override=None):
+        if override:
+            self.today = datetime.datetime.strptime(override, "%Y-%m-%d")
+        else:
+            self.today = datetime.datetime.today()
+        if self.today.weekday() == 1:
+            # today is a tue
+            self.cur_sprint_start = self.today
+        else:
+            self.cur_sprint_start = self.next_weekday(self.today - datetime.timedelta(days=8), 1)
+
         self.next_sprint_start = self.next_weekday(self.today, 1)
-        self.last_sprint_start = self.next_weekday(self.today - datetime.timedelta(days=8), 1)
+        self.last_sprint_start = self.next_weekday(self.cur_sprint_start - datetime.timedelta(days=8), 1)
 
     def show(self):
         board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
@@ -100,15 +114,23 @@ class Sprint(NS1Base):
         create_date = ObjectId(card.id).generation_time
         c.execute('''insert or ignore into cards values (?, ?, ?, ?, ?, ?)''',
                   (card.id, create_date, self.today.isoformat(' '), card.due_date, ','.join(labels), card.name))
-        self._db.commit()
+        # self._db.commit()
         c.close()
 
     def capture_sprint(self, snapshot_phase):
         board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
         cards = board.open_cards()
+        c = self._db.cursor()
+        # make sure cards exist
         for c in cards:
             self.write_card(c)
-            
+            # write them to state
+            c.execute('''insert into sprint_state values (?, ?, ?, ?, ?)''',
+                      (self.cur_sprint_start, ))
+
+        self._db.commit()
+        c.close()
+
 
     def finish_sprint(self):
         # outgoing sprint: snapshot_phase=2 (finish)
@@ -160,10 +182,13 @@ if __name__ == "__main__":
         args['--db'] = os.getenv('HOME') + '/.ns1sprint.db'
 
     t = Sprint(args['--db'])
+    if args['--pretend']:
+        t.date_pretend = args['--pretend']
     t.boot()
 
     if args['<command>'] == 'which':
-        print "Today is: %s, Current Tue is: %s, Next Tue is: %s" % (t.today, t.last_sprint_start, t.next_sprint_start)
+        print "Today is: %s, Current Sprint is: %s, Next Sprint is %s, Last Sprint is: %s" % \
+              (t.today, t.cur_sprint_start, t.next_sprint_start, t.last_sprint_start)
     elif args['<command>'] == 'show':
         t.show()
     elif args['<command>'] == 'finish':
