@@ -24,6 +24,9 @@ from trello import Board
 
 class Sprint(NS1Base):
 
+    # roadmap https://trello.com/b/HNjbGF0O
+    SPRINT_RM_BOARD_ID = '56746d07d270ded2a04eb52c'
+
     def __init__(self, dbname):
         super(Sprint, self).__init__()
         self._db = None
@@ -48,7 +51,7 @@ class Sprint(NS1Base):
     def create_tables(self):
         c = self._db.cursor()
         c.execute('''create table if not exists version (version text primary key)''')
-        c.execute('''create table if not exists lists (list_id text pimary key, name text)''')
+        c.execute('''create table if not exists lists (list_id text primary key, name text)''')
         c.execute('''create table if not exists cards (card_id text primary key, create_date text, '''
                   '''sprint_add_date text, due_date text, labels text, name text)''')
         c.execute('''create table if not exists sprints (sprint_id text primary key, start_date text, '''
@@ -124,7 +127,6 @@ class Sprint(NS1Base):
         create_date = ObjectId(card.id).generation_time
         c.execute('''insert or ignore into cards values (?, ?, ?, ?, ?, ?)''',
                   (card.id, create_date, self.today.isoformat(' '), card.due_date, ','.join(labels), card.name))
-        # self._db.commit()
         c.close()
 
     def capture_sprint(self, sprint_id, snapshot_phase):
@@ -135,8 +137,8 @@ class Sprint(NS1Base):
         for card in cards:
             self.write_card(card)
             # write them to state
-            c.execute('''insert into sprint_state values (?, ?, ?, ?, ?)''',
-                      (sprint_id.date(), card.list_id, card.id, snapshot_phase, 0))
+            c.execute('''insert or ignore into sprint_state values (?, ?, ?, ?, ?)''',
+                      (sprint_id, card.list_id, card.id, snapshot_phase, 0))
         c.close()
 
     def get_sprint_flag(self, name, sprint_id):
@@ -173,7 +175,7 @@ class Sprint(NS1Base):
 
         # outgoing sprint: snapshot_phase=2 (finish)
         try:
-            self.capture_sprint(self.last_sprint_start, snapshot_phase=2)
+            self.capture_sprint(self.last_sprint_id, snapshot_phase=2)
         except Exception as e:
             print "ROLLING BACK"
             self._db.rollback()
@@ -184,11 +186,12 @@ class Sprint(NS1Base):
         # archive all cards in Done column
         board = Board(self.client, board_id=self.SPRINT_BOARD_ID)
         done_list = board.get_list(self.list_ids['Done'])
-        done_cards = done_list.list_cards()
-        for card in done_cards:
-            if not card.closed:
-                print "Closing Done ticket: %s" % card.name
-                card.set_closed(True)
+        done_list.archive_all_cards()
+        # done_cards = done_list.list_cards()
+        # for card in done_cards:
+        #     if not card.closed:
+        #         print "Closing Done ticket: %s" % card.name
+        #         card.set_closed(True)
 
 
     def prep_sprint(self):
@@ -206,19 +209,63 @@ class Sprint(NS1Base):
             post_args={'value': 'Current Sprint %s' % self.cur_sprint_id, }, )
 
         ## right shift sprint roadmap, bring into current sprint
-        
+        rm_board = Board(self.client, board_id=self.SPRINT_RM_BOARD_ID)
+        rm_lists = rm_board.open_lists()
+        rm_list_map = {l.name: l.id for l in rm_lists}
+        from_rm_cards = []
+        for l in reversed(rm_lists):
+            if l.name == 'S + 1':
+                # capture this card list so we can mark from_roadmap correctly
+                from_rm_cards = l.list_cards()
+                # send to sprint
+                board_id = self.SPRINT_BOARD_ID
+                list_id = self.list_ids['New']
+            else:
+                # send to next col
+                board_id = self.SPRINT_RM_BOARD_ID
+                n_id = int(l.name[-1:])
+                list_id = rm_list_map['S + %s' % str(n_id-1)]
+            l.client.fetch_json(
+                '/lists/' + l.id + '/moveAllCards',
+                post_args={'idBoard': board_id, 'idList': list_id},
+                http_method='POST')
+
         ## capture tickets coming in from roadmap (so we can figure out which were added ad hoc after sprint start)
+        c = self._db.cursor()
+        try:
+            for card in from_rm_cards:
+                card.fetch(True)
+                self.write_card(card)
+                # write them to state
+                c.execute('''insert into sprint_state values (?, ?, ?, ?, ?)''',
+                          (self.cur_sprint_id, card.list_id, card.id, 1, 1))
+        except Exception as e:
+            print "ROLLING BACK"
+            self._db.rollback()
+            raise e
+
+        c.close()
 
         self.set_sprint_flag('prepared', self.cur_sprint_id)
         self._db.commit()
 
     def start_sprint(self):
-        self.ensure('prepared', self.last_sprint_id)
-        self.ensure_not('started', self.last_sprint_id)
+        print "Starting Sprint %s" % self.cur_sprint_id
+
+        self.ensure('prepared', self.cur_sprint_id)
+        self.ensure_not('started', self.cur_sprint_id)
         # incoming sprint: snapshot_phase=1 (start), from_roadmap=0
         ## run after prep and after any manual tickets have been added, to capture sprint start
         ## capture sprint board state to sqlite (start)
-        self.capture_sprint(self.cur_sprint_start, snapshot_phase=1)
+        try:
+            self.capture_sprint(self.cur_sprint_id, snapshot_phase=1)
+        except Exception as e:
+            print "ROLLING BACK"
+            self._db.rollback()
+            raise e
+
+        self.set_sprint_flag('started', self.cur_sprint_id)
+        self._db.commit()
 
     def backup(self):
         # send to s3
