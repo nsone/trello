@@ -7,7 +7,13 @@ Options:
     --pretend <date>  Pretend today is date
 
 Commands:
-    show    Show status of current sprint
+    which             Show dates or previous, current, next sprints
+    show              Show status of current sprint
+    finish            Finish the last sprint
+    prepare           Prepare for the current sprint
+    start             Start the current sprint
+    report SPRINT_ID  Show report on the given sprint ID
+    backup            Backup the sprint state database
 
 """
 
@@ -271,18 +277,34 @@ class Sprint(NS1Base):
         # send to s3
         pass
 
-    def report(self):
-        # reports
+    def report(self, sprint_id):
+        print "Sprint Report %s" % sprint_id
         # outgoing
+        c = self._db.cursor()
         ### num in each column
+        r = c.execute('''select lists.name, count(*) from sprint_state, lists where '''
+                      '''sprint_state.list_id=lists.list_id and sprint_id=? and '''
+                      '''snapshot_phase=2 group by lists.list_id''', (sprint_id, ))
+        print "Ticket Outcome:"
+        print r.fetchall()
         ### num overdue
+        r = c.execute('''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=2 and '''
+                      '''list_id!=? and cards.card_id=sprint_state.card_id and '''
+                      '''datetime(due_date) < datetime("now")''', (sprint_id, self.list_ids['Done']))
+        print "Number Overdue"
+        print r.fetchall()
+
+        ### avg overdue age of overdue tickets
         ### avg age of open tickets
         ### avg length in sprint
         ### num fires (label)
+        ### num offense (label)
+        ### num defense (label)
+
         # incoming
         ### num incoming from sprint roadmaps
         ### total new (assuming some added manually from outside sprint roadmap)
-        pass
+
 
 if __name__ == "__main__":
 
@@ -290,7 +312,7 @@ if __name__ == "__main__":
     # print args
 
     if args['<command>'] is None:
-        args['<command>'] = 'show'
+        args['<command>'] = 'which'
 
     if args['--db'] is None:
         args['--db'] = os.getenv('HOME') + '/.ns1sprint.db'
@@ -313,6 +335,10 @@ if __name__ == "__main__":
         t.start_sprint()
     elif args['<command>'] == 'backup':
         t.backup()
+    elif args['<command>'] == 'report':
+        if len(args['<args>']) == 0:
+            raise Exception('report requires a sprint id to report on')
+        t.report(args['<args>'][0])
     else:
         print "unknown command: %s" % args['<command>']
 
