@@ -19,6 +19,7 @@ Commands:
 
 import datetime
 import os
+import shutil
 import sqlite3
 
 from bson import ObjectId
@@ -275,7 +276,7 @@ class Sprint(NS1Base):
 
     def backup(self):
         # send to s3
-        pass
+        shutil.copy(self._db_name, "%s.bak" % (self._db_name))
 
     def report(self, sprint_id):
         print "Sprint Report %s" % sprint_id
