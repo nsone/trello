@@ -23,13 +23,15 @@ class Tix(NS1Base):
         for c in cards:
             c.fetch(True)
             if self.me.id in c.member_ids:
-                print "%s: %s | %s | %s" % (c.name, c.desc, list_names[c.list_id], c.shortUrl)
+                feature_id = c.shortUrl[-8:]
+                print "%s | %s: %s | %s | %s" % (feature_id, c.name, c.desc[0:30],
+                                                 list_names[c.list_id], c.shortUrl)
 
 if __name__ == "__main__":
 
     args = docopt(__doc__)
 
-    print args
+    # print args
     if args['<command>'] is None:
         args['<command>'] = 'list'
 
