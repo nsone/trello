@@ -28,6 +28,10 @@ from docopt import docopt
 from ns1trellobase import NS1Base
 from trello import Board
 
+# snapshot phases
+START = 1
+FINISH = 2
+
 
 class Sprint(NS1Base):
 
@@ -47,6 +51,7 @@ class Sprint(NS1Base):
         self.cur_sprint_id = None
         self.date_pretend = None
         self.list_ids = {}
+        self.list_names_by_id = {}
 
     def boot(self):
         super(Sprint, self).boot()
@@ -80,6 +85,7 @@ class Sprint(NS1Base):
         for l in lists:
             c.execute('''insert or replace into lists values (?, ?)''', (l.id, l.name))
             self.list_ids[l.name] = l.id
+            self.list_names_by_id[l.id] = l.name
         # make sure this and next sprint are in sprints table
         c.execute('''insert or ignore into sprints values (?, ?, ?, 0, 0, 0)''',
                   (self.cur_sprint_id,
@@ -182,7 +188,7 @@ class Sprint(NS1Base):
 
         # outgoing sprint: snapshot_phase=2 (finish)
         try:
-            self.capture_sprint(self.last_sprint_id, snapshot_phase=2)
+            self.capture_sprint(self.last_sprint_id, snapshot_phase=FINISH)
         except Exception as e:
             print "ROLLING BACK"
             self._db.rollback()
@@ -265,7 +271,7 @@ class Sprint(NS1Base):
         ## run after prep and after any manual tickets have been added, to capture sprint start
         ## capture sprint board state to sqlite (start)
         try:
-            self.capture_sprint(self.cur_sprint_id, snapshot_phase=1)
+            self.capture_sprint(self.cur_sprint_id, snapshot_phase=START)
         except Exception as e:
             print "ROLLING BACK"
             self._db.rollback()
@@ -278,10 +284,67 @@ class Sprint(NS1Base):
         # send to s3
         shutil.copy(self._db_name, "%s.bak" % (self._db_name))
 
-    def report(self, sprint_id):
-        print "Sprint Report %s" % sprint_id
-        # outgoing
+    def _report_count(self, sql, *args, **kwargs):
         c = self._db.cursor()
+        r = c.execute(sql, *args, **kwargs)
+        result = r.fetchall()
+        c.close()
+        return result[0][0]
+
+    def _get_card_map(self, sprint_id, phase):
+        c = self._db.cursor()
+        sql = '''select card_id, list_id from sprint_state where snapshot_phase=? and sprint_id=?'''
+        r = c.execute(sql, (phase, sprint_id, ))
+        # list_id => [card_id, ...]
+        map = {}
+        for rec in r.fetchall():
+            lname = self.list_names_by_id[rec[1]]
+            if lname not in map:
+                map[lname] = []
+            map[lname].append(rec[0])
+        c.close()
+        return map
+
+    def _array_marks(self, arr):
+        quoted = ['"%s"' % v for v in arr]
+        return ','.join(quoted)
+
+    def report(self, sprint_id):
+        print "Sprint Report %s (compared to previous %s)" % (sprint_id, self.last_sprint_id)
+
+        c = self._db.cursor()
+
+        # get a list of card ids from all the lists from last sprint finish, so we can see how they changed
+        # (or not) to this sprint
+        last_finish_map = self._get_card_map(self.last_sprint_id, FINISH)
+
+        # for l in self.list_ids:
+        #     print l
+        #     print last_finish_map[self.list_ids[l]]
+
+        # incoming
+        ### num punted from last sprint (never left New column)
+        sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1 and
+                 list_id=? and sprint_state.card_id in (%s)''' % (self._array_marks(last_finish_map['New']))
+        print "Punted From Last Sprint (Still In New)"
+        print self._report_count(sql, (sprint_id, self.list_ids['New']))
+
+
+        ### num incoming from sprint roadmaps
+        sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
+                 from_roadmap=1 and list_id=? and cards.card_id=sprint_state.card_id'''
+        print "Incoming From Sprint Roadmap"
+        print self._report_count(sql, (sprint_id, self.list_ids['New']))
+
+        ### total new (assuming some added manually from outside sprint roadmap)
+        sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
+                 from_roadmap=0 and list_id=? and cards.card_id=sprint_state.card_id'''
+        print "Total New"
+        print self._report_count(sql, (sprint_id, self.list_ids['New']))
+
+        return
+
+        # outgoing
         ### num in each column
         r = c.execute('''select lists.name, count(*) from sprint_state, lists where '''
                       '''sprint_state.list_id=lists.list_id and sprint_id=? and '''
@@ -302,9 +365,6 @@ class Sprint(NS1Base):
         ### num offense (label)
         ### num defense (label)
 
-        # incoming
-        ### num incoming from sprint roadmaps
-        ### total new (assuming some added manually from outside sprint roadmap)
 
 
 if __name__ == "__main__":
@@ -339,6 +399,8 @@ if __name__ == "__main__":
     elif args['<command>'] == 'report':
         if len(args['<args>']) == 0:
             raise Exception('report requires a sprint id to report on')
+        # pretend it's the sprint id they requested, so that last_sprint gets set properly
+        t.date_pretend = args['<args>'][0]
         t.report(args['<args>'][0])
     else:
         print "unknown command: %s" % args['<command>']
