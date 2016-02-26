@@ -322,25 +322,42 @@ class Sprint(NS1Base):
         #     print l
         #     print last_finish_map[self.list_ids[l]]
 
-        # incoming
-        ### num punted from last sprint (never left New column)
-        sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1 and
-                 list_id=? and sprint_state.card_id in (%s)''' % (self._array_marks(last_finish_map['New']))
-        print "Punted From Last Sprint (Still In New)"
-        print self._report_count(sql, (sprint_id, self.list_ids['New']))
+        # incoming: new to this sprint
 
-
-        ### num incoming from sprint roadmaps
+        ### num incoming from sprint roadmaps (excluding cards carried over form last sprint)
         sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
-                 from_roadmap=1 and list_id=? and cards.card_id=sprint_state.card_id'''
+                 from_roadmap=1 and list_id=? and cards.card_id=sprint_state.card_id
+                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
         print "Incoming From Sprint Roadmap"
         print self._report_count(sql, (sprint_id, self.list_ids['New']))
 
-        ### total new (assuming some added manually from outside sprint roadmap)
+        ### num added to New column after Prep (after incoming from roadmap) but before Start
         sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
-                 from_roadmap=0 and list_id=? and cards.card_id=sprint_state.card_id'''
-        print "Total New"
+                 from_roadmap=0 and list_id=? and cards.card_id=sprint_state.card_id
+                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
+        print "Incoming Ad Hoc"
         print self._report_count(sql, (sprint_id, self.list_ids['New']))
+
+        ### total new at start
+        sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
+                 list_id=? and cards.card_id=sprint_state.card_id
+                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
+        print "Total New At Start Of Sprint"
+        print self._report_count(sql, (sprint_id, self.list_ids['New']))
+
+        # incoming: punted/existed in last sprint
+        ### num punted from last sprint in various columns
+        punt_cols = ['New', 'In Progress', 'Review', 'Pending']
+        punt_counts = 0
+        for pc in punt_cols:
+            sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1 and
+                     list_id=? and sprint_state.card_id in (%s)''' % (self._array_marks(last_finish_map[pc]))
+            print "Punted From Last Sprint: %s" % pc
+            rc = self._report_count(sql, (sprint_id, self.list_ids[pc]))
+            punt_counts += int(rc)
+            print rc
+
+        print "Total Punted: %s (XX %%)" % (punt_counts)
 
         return
 
