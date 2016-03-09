@@ -7,13 +7,14 @@ Options:
     --pretend <date>  Pretend today is date
 
 Commands:
-    which             Show dates or previous, current, next sprints
-    show              Show status of current sprint
-    finish            Finish the last sprint
-    prepare           Prepare for the current sprint
-    start             Start the current sprint
-    report SPRINT_ID  Show report on the given sprint ID
-    backup            Backup the sprint state database
+    which                          Show dates or previous, current, next sprints
+    show                           Show status of current sprint
+    finish                         Finish the last sprint
+    prepare                        Prepare for the current sprint
+    start                          Start the current sprint
+    report SPRINT_ID               Show report on the given sprint ID
+    backup                         Backup the sprint state database
+    state  SPRINT_ID START|FINISH  Show state of tickets in given sprint
 
 """
 
@@ -227,6 +228,8 @@ class Sprint(NS1Base):
         rm_list_map = {l.name: l.id for l in rm_lists}
         from_rm_cards = []
         for l in reversed(rm_lists):
+            if l.name == 'Incoming':
+                continue
             if l.name == 'S + 1':
                 # capture this card list so we can mark from_roadmap correctly
                 from_rm_cards = l.list_cards()
@@ -309,10 +312,23 @@ class Sprint(NS1Base):
         quoted = ['"%s"' % v for v in arr]
         return ','.join(quoted)
 
+    def _pperc(self, part, total):
+        p = (float(part) / float(total)) * 100
+        return "%s/%s%%" % (part, round(p, 2))
+
+    def show_state(self, sprint_id, snapshot_phase):
+        c = self._db.cursor()
+        sql = '''select date(sprint_add_date), cards.name, labels, lists.name from sprint_state, cards,
+                 lists where sprint_id=? and snapshot_phase=? and cards.card_id=sprint_state.card_id
+                 and sprint_state.list_id=lists.list_id'''
+        r = c.execute(sql, (sprint_id, snapshot_phase))
+        result = r.fetchall()
+        for r in result:
+            print r
+        c.close()
+
     def report(self, sprint_id):
         print "Sprint Report %s (compared to previous %s)" % (sprint_id, self.last_sprint_id)
-
-        c = self._db.cursor()
 
         # get a list of card ids from all the lists from last sprint finish, so we can see how they changed
         # (or not) to this sprint
@@ -322,30 +338,41 @@ class Sprint(NS1Base):
         #     print l
         #     print last_finish_map[self.list_ids[l]]
 
+        sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
+                 cards.card_id=sprint_state.card_id'''
+        total_at_start = self._report_count(sql, (sprint_id, ))
+
         # incoming: new to this sprint
+        print "INCOMING"
+        print " -- NEW"
 
         ### num incoming from sprint roadmaps (excluding cards carried over form last sprint)
         sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
                  from_roadmap=1 and list_id=? and cards.card_id=sprint_state.card_id
                  and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
         print "Incoming From Sprint Roadmap"
-        print self._report_count(sql, (sprint_id, self.list_ids['New']))
+        incoming_roadmap = self._report_count(sql, (sprint_id, self.list_ids['New']))
+        print incoming_roadmap
 
         ### num added to New column after Prep (after incoming from roadmap) but before Start
         sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
                  from_roadmap=0 and list_id=? and cards.card_id=sprint_state.card_id
                  and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
-        print "Incoming Ad Hoc"
-        print self._report_count(sql, (sprint_id, self.list_ids['New']))
+        print "Additional Incoming At Sprint Planning Time"
+        incoming_adhoc = self._report_count(sql, (sprint_id, self.list_ids['New']))
+        print incoming_adhoc
 
         ### total new at start
         sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
                  list_id=? and cards.card_id=sprint_state.card_id
                  and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
-        print "Total New At Start Of Sprint"
-        print self._report_count(sql, (sprint_id, self.list_ids['New']))
+        total_incoming = self._report_count(sql, (sprint_id, self.list_ids['New']))
+        assert(total_incoming == (incoming_adhoc + incoming_roadmap))
+        print "TOTAL INCOMING NEW: %s" % (self._pperc(total_incoming, total_at_start))
 
         # incoming: punted/existed in last sprint
+        print " -- PUNTED/CARRYOVER"
+
         ### num punted from last sprint in various columns
         punt_cols = ['New', 'In Progress', 'Review', 'Pending']
         punt_counts = 0
@@ -357,7 +384,9 @@ class Sprint(NS1Base):
             punt_counts += int(rc)
             print rc
 
-        print "Total Punted: %s (XX %%)" % (punt_counts)
+        print "TOTAL INCOMING PUNTED: %s" % (self._pperc(punt_counts, total_at_start))
+        assert(total_incoming + punt_counts == total_at_start)
+        print "TOTAL AT SPRINT START: %s" % (total_at_start)
 
         return
 
@@ -413,6 +442,14 @@ if __name__ == "__main__":
         t.start_sprint()
     elif args['<command>'] == 'backup':
         t.backup()
+    elif args['<command>'] == 'state':
+        if len(args['<args>']) == 0 or len(args['<args>']) == 1:
+            raise Exception('state requires a sprint id to report on and snapshot phase (default START)')
+        if args['<args>'][1] == 'finish':
+            phase = FINISH
+        else:
+            phase = START
+        t.show_state(args['<args>'][0], phase)
     elif args['<command>'] == 'report':
         if len(args['<args>']) == 0:
             raise Exception('report requires a sprint id to report on')

@@ -1,4 +1,5 @@
 from trello import TrelloClient, Member
+from trello.exceptions import Unauthorized
 import os
 import sys
 
@@ -18,6 +19,9 @@ class NS1Base(object):
 
     def check_oauth(self):
         if not os.getenv('TRELLO_OAUTH_KEY') or not os.getenv('TRELLO_OAUTH_SECRET'):
+            self.create_oauth()
+
+    def create_oauth(self):
             from trello import util
             util.create_oauth_token()
             sys.exit(0)
@@ -27,6 +31,12 @@ class NS1Base(object):
                                    api_secret=os.getenv('TRELLO_API_SECRET'),
                                    token=os.getenv('TRELLO_OAUTH_KEY'),
                                    token_secret=os.getenv('TRELLO_OAUTH_SECRET'))
+        # check for auth
+        try:
+            self.client.list_organizations()
+        except Unauthorized:
+            print "RECEIVED UNAUTHORIZED, RECREATING OAUTH"
+            self.create_oauth()
 
     @property
     def me(self):
