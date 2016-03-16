@@ -330,6 +330,8 @@ class Sprint(NS1Base):
     def report(self, sprint_id):
         print "Sprint Report %s (compared to previous %s)" % (sprint_id, self.last_sprint_id)
 
+        assert(sprint_id != self.last_sprint_id)
+
         # get a list of card ids from all the lists from last sprint finish, so we can see how they changed
         # (or not) to this sprint
         last_finish_map = self._get_card_map(self.last_sprint_id, FINISH)
@@ -338,8 +340,7 @@ class Sprint(NS1Base):
         #     print l
         #     print last_finish_map[self.list_ids[l]]
 
-        sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
-                 cards.card_id=sprint_state.card_id'''
+        sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1'''
         total_at_start = self._report_count(sql, (sprint_id, ))
 
         # incoming: new to this sprint
@@ -385,8 +386,25 @@ class Sprint(NS1Base):
             print rc
 
         print "TOTAL INCOMING PUNTED: %s" % (self._pperc(punt_counts, total_at_start))
-        assert(total_incoming + punt_counts == total_at_start)
+
+        # incoming: dropped into a column ad hoc, skipping New
+        print " -- NEW, BUT ALREADY IN PROGRESS"
+
+        ### num added to a column this sprint which wasn't in last sprint and skipped new
+        nip_cols = ['In Progress', 'Review', 'Pending']
+        nip_counts = 0
+        for pc in nip_cols:
+            sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1 and
+                     list_id=? and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map[pc]))
+            print "New In Progress This Sprint: %s" % pc
+            rc = self._report_count(sql, (sprint_id, self.list_ids[pc]))
+            nip_counts += int(rc)
+            print rc
+
+        print "TOTAL INCOMING IN PROGRESS: %s" % (self._pperc(nip_counts, total_at_start))
+
         print "TOTAL AT SPRINT START: %s" % (total_at_start)
+        assert(total_incoming + punt_counts + nip_counts == total_at_start)
 
         return
 
@@ -427,6 +445,13 @@ if __name__ == "__main__":
     t = Sprint(args['--db'])
     if args['--pretend']:
         t.date_pretend = args['--pretend']
+
+    if args['<command>'] == 'report':
+        if len(args['<args>']) == 0:
+            raise Exception('report requires a sprint id to report on')
+        # pretend it's the sprint id they requested, so that last_sprint gets set properly
+        t.date_pretend = args['<args>'][0]
+
     t.boot()
 
     if args['<command>'] == 'which':
@@ -451,10 +476,7 @@ if __name__ == "__main__":
             phase = START
         t.show_state(args['<args>'][0], phase)
     elif args['<command>'] == 'report':
-        if len(args['<args>']) == 0:
-            raise Exception('report requires a sprint id to report on')
-        # pretend it's the sprint id they requested, so that last_sprint gets set properly
-        t.date_pretend = args['<args>'][0]
+        # date arg checked above
         t.report(args['<args>'][0])
     else:
         print "unknown command: %s" % args['<command>']
