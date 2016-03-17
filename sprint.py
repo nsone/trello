@@ -33,6 +33,12 @@ from trello import Board
 START = 1
 FINISH = 2
 
+# labels
+FIRE = 'Fire'
+LABELS = [FIRE, 'Ops Team']
+
+# columns
+TARGET_COL = 'Done' # end target for a card
 
 class Sprint(NS1Base):
 
@@ -342,6 +348,8 @@ class Sprint(NS1Base):
 
         sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1'''
         total_at_start = self._report_count(sql, (sprint_id, ))
+        sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=2'''
+        total_at_finish = self._report_count(sql, (sprint_id, ))
 
         # incoming: new to this sprint
         print "INCOMING"
@@ -406,28 +414,44 @@ class Sprint(NS1Base):
         print "TOTAL AT SPRINT START: %s" % (total_at_start)
         assert(total_incoming + punt_counts + nip_counts == total_at_start)
 
-        return
+        print "=-=-=-=-=-=-=-=-=-="
+        print "OUTGOING"
+        print " -- TOTALS"
 
         # outgoing
         ### num in each column
-        r = c.execute('''select lists.name, count(*) from sprint_state, lists where '''
-                      '''sprint_state.list_id=lists.list_id and sprint_id=? and '''
-                      '''snapshot_phase=2 group by lists.list_id''', (sprint_id, ))
-        print "Ticket Outcome:"
-        print r.fetchall()
+        out_cols = ['New', 'In Progress', 'Review', 'Pending', TARGET_COL]
+        out_counts = 0
+        for pc in out_cols:
+            sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=2 and list_id=?'''
+            print "Outgoing: %s" % pc
+            rc = self._report_count(sql, (sprint_id, self.list_ids[pc]))
+            out_counts += int(rc)
+            if pc == TARGET_COL:
+                done_count = int(rc)
+            print self._pperc(rc, total_at_finish)
+
+        print "TOTAL OUTGOING: %s" % (out_counts)
+        assert(total_at_finish == out_counts)
+
+        ### num per label
+        for l in LABELS:
+            sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=2
+                     and cards.card_id=sprint_state.card_id and instr(cards.labels, "%s")''' % l
+            num_label = self._report_count(sql, (sprint_id, ))
+            print "TOTAL LABEL %s: %s" % (l, self._pperc(num_label, total_at_finish))
+
+        ### in to out ratio
+        print "INCOMING to DONE RATIO: %s:%s/%f" % (total_incoming,
+                                                    done_count,
+                                                    float(total_incoming)/done_count)
+
         ### num overdue
-        r = c.execute('''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=2 and '''
-                      '''list_id!=? and cards.card_id=sprint_state.card_id and '''
-                      '''datetime(due_date) < datetime("now")''', (sprint_id, self.list_ids['Done']))
-        print "Number Overdue"
-        print r.fetchall()
+
 
         ### avg overdue age of overdue tickets
         ### avg age of open tickets
         ### avg length in sprint
-        ### num fires (label)
-        ### num offense (label)
-        ### num defense (label)
 
 
 
