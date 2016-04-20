@@ -145,7 +145,7 @@ class Sprint(NS1Base):
         c = self._db.cursor()
         labels = [l.name for l in card.labels]
         create_date = ObjectId(card.id).generation_time
-        c.execute('''insert or ignore into cards values (?, ?, ?, ?, ?, ?)''',
+        c.execute('''insert or replace into cards values (?, ?, ?, ?, ?, ?)''',
                   (card.id, create_date, self.today.isoformat(' '), card.due_date, ','.join(labels), card.name))
         c.close()
 
@@ -327,7 +327,7 @@ class Sprint(NS1Base):
 
     def show_state(self, sprint_id, snapshot_phase):
         c = self._db.cursor()
-        sql = '''select date(sprint_add_date), cards.name, labels, lists.name from sprint_state, cards,
+        sql = '''select date(sprint_add_date), cards.name, labels, lists.name, due_date from sprint_state, cards,
                  lists where sprint_id=? and snapshot_phase=? and cards.card_id=sprint_state.card_id
                  and sprint_state.list_id=lists.list_id'''
         r = c.execute(sql, (sprint_id, snapshot_phase))
@@ -335,6 +335,27 @@ class Sprint(NS1Base):
         for r in result:
             print r
         c.close()
+
+    def _due_dates(self, sprint_id):
+        c = self._db.cursor()
+        sql = '''select date(due_date) from sprint_state, cards,
+                 lists where sprint_id=? and snapshot_phase=? and cards.card_id=sprint_state.card_id
+                 and sprint_state.list_id=lists.list_id'''
+        r = c.execute(sql, (sprint_id, FINISH))
+        result = r.fetchall()
+        num_w_dates = 0
+        num_overdue = 0
+        last_day_of_sprint = self.next_sprint_start - datetime.timedelta(days=1)
+        for r in result:
+            if r[0] is None or r[0] == '':
+                continue
+            else:
+                num_w_dates += 1
+                dd = datetime.datetime.strptime(r[0], "%Y-%m-%d")
+                if last_day_of_sprint > dd:
+                    num_overdue += 1
+        c.close()
+        return (num_w_dates, num_overdue)
 
     def report(self, sprint_id):
         print "Sprint Report %s (compared to previous %s)" % (sprint_id, self.last_sprint_id)
@@ -450,6 +471,10 @@ class Sprint(NS1Base):
                                                     float(total_incoming)/done_count)
 
         ### num overdue
+        ### num w due dates
+        (num_w_dates, num_overdue) = self._due_dates(sprint_id)
+        print "OUTGOING WITH DUEDATES: %s" % (self._pperc(num_w_dates, out_counts))
+        print "OUTGOING OVERDUE: %s" % (self._pperc(num_overdue, out_counts))
 
         ### now many NEW fires this sprint?
 
