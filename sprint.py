@@ -8,6 +8,7 @@ Options:
 
 Commands:
     which                          Show dates or previous, current, next sprints
+    cards                          Update all known cards to latest due_dates, labels, etc
     show                           Show status of current sprint
     finish                         Finish the last sprint
     prepare                        Prepare for the current sprint
@@ -147,6 +148,20 @@ class Sprint(NS1Base):
         create_date = ObjectId(card.id).generation_time
         c.execute('''insert or replace into cards values (?, ?, ?, ?, ?, ?)''',
                   (card.id, create_date, self.today.isoformat(' '), card.due_date, ','.join(labels), card.name))
+        c.close()
+
+    def cards(self):
+        c = self._db.cursor()
+        sql = '''select card_id from cards'''
+        r = c.execute(sql)
+        cards = r.fetchall()
+        for cid in cards:
+            try:
+                card = self.client.get_card(cid[0])
+                print "working on %s" % (card)
+            except:
+                print "ERROR loading id %s, SKIPPING" % cid[0]
+                self.write_card(card)
         c.close()
 
     def capture_sprint(self, sprint_id, snapshot_phase):
@@ -520,6 +535,8 @@ if __name__ == "__main__":
         t.start_sprint()
     elif args['<command>'] == 'backup':
         t.backup()
+    elif args['<command>'] == 'cards':
+        t.cards()
     elif args['<command>'] == 'state':
         if len(args['<args>']) == 0 or len(args['<args>']) == 1:
             raise Exception('state requires a sprint id to report on and snapshot phase (default START)')
