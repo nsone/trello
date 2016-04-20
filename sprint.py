@@ -234,7 +234,8 @@ class Sprint(NS1Base):
         rm_list_map = {l.name: l.id for l in rm_lists}
         from_rm_cards = []
         for l in reversed(rm_lists):
-            if l.name == 'Incoming':
+            # leave any non S + N lists alone
+            if not l.name.startswith('S +'):
                 continue
             if l.name == 'S + 1':
                 # capture this card list so we can mark from_roadmap correctly
@@ -319,6 +320,8 @@ class Sprint(NS1Base):
         return ','.join(quoted)
 
     def _pperc(self, part, total):
+        if total == 0:
+            return 'NaN'
         p = (float(part) / float(total)) * 100
         return "%s/%s%%" % (part, round(p, 2))
 
@@ -448,6 +451,7 @@ class Sprint(NS1Base):
 
         ### num overdue
 
+        ### now many NEW fires this sprint?
 
         ### avg overdue age of overdue tickets
         ### avg age of open tickets
