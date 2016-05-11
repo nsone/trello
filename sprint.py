@@ -422,9 +422,11 @@ class Sprint(NS1Base):
         print " -- PUNTED/CARRYOVER"
 
         ### num punted from last sprint in various columns
-        punt_cols = ['New', 'In Progress', 'Review', 'Pending']
+        punt_cols = ['New', 'Blocked', 'In Progress', 'Review', 'Pending']
         punt_counts = 0
         for pc in punt_cols:
+            if pc not in last_finish_map:
+                continue
             sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1 and
                      list_id=? and sprint_state.card_id in (%s)''' % (self._array_marks(last_finish_map[pc]))
             print "Punted From Last Sprint: %s" % pc
@@ -438,9 +440,11 @@ class Sprint(NS1Base):
         print " -- NEW, BUT ALREADY IN PROGRESS"
 
         ### num added to a column this sprint which wasn't in last sprint and skipped new
-        nip_cols = ['In Progress', 'Review', 'Pending']
+        nip_cols = ['Blocked', 'In Progress', 'Review', 'Pending']
         nip_counts = 0
         for pc in nip_cols:
+            if pc not in last_finish_map:
+                continue
             sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1 and
                      list_id=? and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map[pc]))
             print "New In Progress This Sprint: %s" % pc
@@ -459,7 +463,7 @@ class Sprint(NS1Base):
 
         # outgoing
         ### num in each column
-        out_cols = ['New', 'In Progress', 'Review', 'Pending', TARGET_COL]
+        out_cols = ['New', 'Blocked', 'In Progress', 'Review', 'Pending', TARGET_COL]
         out_counts = 0
         for pc in out_cols:
             sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=2 and list_id=?'''
