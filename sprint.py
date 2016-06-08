@@ -36,10 +36,14 @@ FINISH = 2
 
 # labels
 FIRE = 'Fire'
-LABELS = [FIRE, 'Ops Team']
+LABELS = [FIRE, 'Child', 'Ops Team']
 
 # columns
 TARGET_COL = 'Done' # end target for a card
+
+# set default due dates? set to None to disable
+# otherwise, set to a time delta in the future
+DEFAULT_DUE_DATE = datetime.timedelta(6);
 
 class Sprint(NS1Base):
 
