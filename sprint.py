@@ -277,6 +277,9 @@ class Sprint(NS1Base):
         try:
             for card in from_rm_cards:
                 card.fetch(True)
+                # if we are doing default due dates, add now if it doesn't exist
+                if DEFAULT_DUE_DATE:
+                    card.set_due(self.today + DEFAULT_DUE_DATE)
                 self.write_card(card)
                 # write them to state
                 c.execute('''insert into sprint_state values (?, ?, ?, ?, ?)''',
