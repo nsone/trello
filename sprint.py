@@ -338,6 +338,8 @@ class Sprint(NS1Base):
         return map
 
     def _array_marks(self, arr):
+        if arr is None:
+            return ''
         quoted = ['"%s"' % v for v in arr]
         return ','.join(quoted)
 
@@ -404,7 +406,7 @@ class Sprint(NS1Base):
         ### num incoming from sprint roadmaps (excluding cards carried over form last sprint)
         sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
                  from_roadmap=1 and list_id=? and cards.card_id=sprint_state.card_id
-                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
+                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map.get('New', None)))
         print "Incoming From Sprint Roadmap"
         incoming_roadmap = self._report_count(sql, (sprint_id, self.list_ids['New']))
         print incoming_roadmap
@@ -412,7 +414,7 @@ class Sprint(NS1Base):
         ### num added to New column after Prep (after incoming from roadmap) but before Start
         sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
                  from_roadmap=0 and list_id=? and cards.card_id=sprint_state.card_id
-                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
+                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map.get('New', None)))
         print "Additional Incoming At Sprint Planning Time"
         incoming_adhoc = self._report_count(sql, (sprint_id, self.list_ids['New']))
         print incoming_adhoc
@@ -420,7 +422,7 @@ class Sprint(NS1Base):
         ### total new at start
         sql = '''select count(*) from sprint_state, cards where sprint_id=? and snapshot_phase=1 and
                  list_id=? and cards.card_id=sprint_state.card_id
-                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map['New']))
+                 and sprint_state.card_id not in (%s)''' % (self._array_marks(last_finish_map.get('New', None)))
         total_incoming = self._report_count(sql, (sprint_id, self.list_ids['New']))
         assert(total_incoming == (incoming_adhoc + incoming_roadmap))
         print "TOTAL INCOMING NEW: %s" % (self._pperc(total_incoming, total_at_start))
