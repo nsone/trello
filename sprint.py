@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """
-usage: sprint.py [--db <db>] [--pretend <date>] [<command>] [<args>...]
+usage: sprint.py [--db <db>] [--sprint-len <N>] [--last-sprint-id <date>] SPRINT_ID [<command>] [<args>...]
 
 Options:
-    --db <db>         Where to find the sqlite db.
-    --pretend <date>  Pretend today is date
+    --db <db>               Where to find the sqlite db.
+    --sprint-len <N>        Set sprint length to N weeks
+    --last-sprint-id <date> Override the last sprint id, useful when changing sprint lengths
 
 Commands:
     which                          Show dates or previous, current, next sprints
@@ -13,9 +14,9 @@ Commands:
     finish                         Finish the last sprint
     prepare                        Prepare for the current sprint
     start                          Start the current sprint
-    report SPRINT_ID               Show report on the given sprint ID
+    report                         Show report on the given sprint ID
     backup                         Backup the sprint state database
-    state  SPRINT_ID START|FINISH  Show state of tickets in given sprint
+    state START|FINISH             Show state of tickets in given sprint
 
 """
 
@@ -39,11 +40,15 @@ FIRE = 'Fire'
 LABELS = [FIRE, 'Child', 'Ops Team']
 
 # columns
-TARGET_COL = 'Done' # end target for a card
+TARGET_COL = 'Done'  # end target for a card
+
+# sprint length, in weeks
+DEFAULT_SPRINT_LEN = 2
 
 # set default due dates? set to None to disable
 # otherwise, set to a time delta in the future
-DEFAULT_DUE_DATE = datetime.timedelta(6);
+# default is last day of the sprint
+DEFAULT_DUE_DATE = datetime.timedelta((7*DEFAULT_SPRINT_LEN)-1)
 
 class Sprint(NS1Base):
 
@@ -54,20 +59,23 @@ class Sprint(NS1Base):
         super(Sprint, self).__init__()
         self._db = None
         self._db_name = dbname
-        self.today = None
+
         self.last_sprint_start = None
         self.next_sprint_start = None
         self.cur_sprint_start = None
+
         self.last_sprint_id = None
         self.next_sprint_id = None
         self.cur_sprint_id = None
-        self.date_pretend = None
+
+        self.sprint_len = DEFAULT_SPRINT_LEN
+
         self.list_ids = {}
         self.list_names_by_id = {}
 
-    def boot(self):
+    def boot(self, sprint_id=None, last_sprint_id=None):
         super(Sprint, self).boot()
-        self.determine_sprint(self.date_pretend)
+        self.determine_sprint(sprint_id, last_sprint_id)
         self._db = sqlite3.connect(self._db_name)
         self.create_tables()
         self.populate_tables()
@@ -107,30 +115,23 @@ class Sprint(NS1Base):
         c.execute('''insert or ignore into sprints values (?, ?, ?, 0, 0, 0)''',
                   (self.next_sprint_id,
                    self.next_sprint_start,
-                   self.next_weekday(self.next_sprint_start, 0)))
+                   self.next_sprint_end))
         self._db.commit()
         c.close()
 
-    # http://stackoverflow.com/questions/6558535/python-find-the-date-for-the-first-monday-after-a-given-a-date
-    def next_weekday(self, d, weekday):
-        days_ahead = weekday - d.weekday()
-        if days_ahead <= 0:  # Target day already happened this week
-            days_ahead += 7
-        return d + datetime.timedelta(days_ahead)
-
-    def determine_sprint(self, override=None):
-        if override:
-            self.today = datetime.datetime.strptime(override, "%Y-%m-%d")
+    def determine_sprint(self, sprint_id=None, last_sprint_id=None):
+        if sprint_id:
+            self.cur_sprint_start = datetime.datetime.strptime(sprint_id, "%Y-%m-%d")
         else:
-            self.today = datetime.datetime.today()
-        if self.today.weekday() == 1:
-            # today is a tue
-            self.cur_sprint_start = self.today
+            self.cur_sprint_start = datetime.datetime.today()
+        if last_sprint_id:
+            self.last_sprint_start = datetime.datetime.strptime(last_sprint_id, "%Y-%m-%d")
         else:
-            self.cur_sprint_start = self.next_weekday(self.today - datetime.timedelta(days=8), 1)
+            self.last_sprint_start = self.cur_sprint_start - datetime.timedelta(weeks=self.sprint_len)
 
-        self.next_sprint_start = self.next_weekday(self.today, 1)
-        self.last_sprint_start = self.next_weekday(self.cur_sprint_start - datetime.timedelta(days=8), 1)
+        self.next_sprint_start = self.cur_sprint_start + datetime.timedelta(weeks=self.sprint_len)
+        self.next_sprint_end = self.next_sprint_start + datetime.timedelta(weeks=self.sprint_len) - datetime.timedelta(days=1)
+
         self.last_sprint_id = str(self.last_sprint_start.date())
         self.next_sprint_id = str(self.next_sprint_start.date())
         self.cur_sprint_id = str(self.cur_sprint_start.date())
@@ -278,7 +279,7 @@ class Sprint(NS1Base):
             for card in from_rm_cards:
                 card.fetch(True)
                 # if we are doing default due dates, add now if it doesn't exist
-                if DEFAULT_DUE_DATE:
+                if card.due is None and DEFAULT_DUE_DATE:
                     card.set_due(self.today + DEFAULT_DUE_DATE)
                 self.write_card(card)
                 # write them to state
@@ -524,20 +525,15 @@ if __name__ == "__main__":
         args['--db'] = os.getenv('HOME') + '/.ns1sprint.db'
 
     t = Sprint(args['--db'])
-    if args['--pretend']:
-        t.date_pretend = args['--pretend']
 
-    if args['<command>'] == 'report':
-        if len(args['<args>']) == 0:
-            raise Exception('report requires a sprint id to report on')
-        # pretend it's the sprint id they requested, so that last_sprint gets set properly
-        t.date_pretend = args['<args>'][0]
+    if args['--sprint-len']:
+        t.sprint_len = args['--sprint-len']
 
-    t.boot()
+    t.boot(args['SPRINT_ID'], args['--last-sprint-id'])
 
     if args['<command>'] == 'which':
-        print "Today is: %s, Current Sprint is: %s, Next Sprint is %s, Last Sprint is: %s" % \
-              (t.today.date(), t.cur_sprint_id, t.next_sprint_id, t.last_sprint_id)
+        print "Current Sprint is: %s, Next Sprint is %s, Next Sprint End is %s, Last Sprint is: %s, Sprint Length: %s" % \
+              (t.cur_sprint_id, t.next_sprint_id, t.next_sprint_end, t.last_sprint_id, t.sprint_len)
     elif args['<command>'] == 'show':
         t.show()
     elif args['<command>'] == 'finish':
