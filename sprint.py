@@ -152,7 +152,7 @@ class Sprint(NS1Base):
         labels = [l.name for l in card.labels]
         create_date = ObjectId(card.id).generation_time
         c.execute('''insert or replace into cards values (?, ?, ?, ?, ?, ?)''',
-                  (card.id, create_date, self.today.isoformat(' '), card.due_date, ','.join(labels), card.name))
+                  (card.id, create_date, datetime.datetime.today().isoformat(' '), card.due_date, ','.join(labels), card.name))
         c.close()
 
     def cards(self):
@@ -280,7 +280,7 @@ class Sprint(NS1Base):
                 card.fetch(True)
                 # if we are doing default due dates, add now if it doesn't exist
                 if card.due is None and DEFAULT_DUE_DATE:
-                    card.set_due(self.today + DEFAULT_DUE_DATE)
+                    card.set_due(self.cur_sprint_start + DEFAULT_DUE_DATE)
                 self.write_card(card)
                 # write them to state
                 c.execute('''insert into sprint_state values (?, ?, ?, ?, ?)''',
