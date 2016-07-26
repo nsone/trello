@@ -555,8 +555,7 @@ if __name__ == "__main__":
             phase = START
         t.show_state(args['<args>'][0], phase)
     elif args['<command>'] == 'report':
-        # date arg checked above
-        t.report(args['<args>'][0])
+        t.report(args['SPRINT_ID'])
     else:
         print "unknown command: %s" % args['<command>']
 
