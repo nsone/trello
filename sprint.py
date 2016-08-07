@@ -350,12 +350,12 @@ class Sprint(NS1Base):
         p = (float(part) / float(total)) * 100
         return "%s/%s%%" % (part, round(p, 2))
 
-    def show_state(self, sprint_id, snapshot_phase):
+    def show_state(self, snapshot_phase):
         c = self._db.cursor()
         sql = '''select date(sprint_add_date), cards.name, labels, lists.name, due_date from sprint_state, cards,
                  lists where sprint_id=? and snapshot_phase=? and cards.card_id=sprint_state.card_id
                  and sprint_state.list_id=lists.list_id'''
-        r = c.execute(sql, (sprint_id, snapshot_phase))
+        r = c.execute(sql, (self.cur_sprint_id, snapshot_phase))
         result = r.fetchall()
         for r in result:
             print r
@@ -547,13 +547,13 @@ if __name__ == "__main__":
     elif args['<command>'] == 'cards':
         t.cards()
     elif args['<command>'] == 'state':
-        if len(args['<args>']) == 0 or len(args['<args>']) == 1:
-            raise Exception('state requires a sprint id to report on and snapshot phase (default START)')
-        if args['<args>'][1] == 'finish':
+        if len(args['<args>']) == 0:
+            raise Exception('state requires a snapshot phase (default START)')
+        if args['<args>'][0] == 'finish':
             phase = FINISH
         else:
             phase = START
-        t.show_state(args['<args>'][0], phase)
+        t.show_state(phase)
     elif args['<command>'] == 'report':
         t.report(args['SPRINT_ID'])
     else:
