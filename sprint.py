@@ -37,10 +37,20 @@ FINISH = 2
 
 # labels
 FIRE = 'Fire'
-LABELS = [FIRE, 'Child', 'Ops Team']
+LABELS = [FIRE, 'Child', 'Ops', 'Frontend', 'Customer Fire', 'Backend', 'DevOps']
 
 # columns
+START_COL = 'New' # starting spot for a new card
 TARGET_COL = 'Done'  # end target for a card
+
+# report columns
+COLS = [START_COL, 'Scoping', 'Blocked', 'In Progress', 'Review', 'Product Team Review', 'Deploy', TARGET_COL]
+# punted if it didn't wind up in TARGET_COL
+PUNT_COLS = COLS[:-1]
+# any ticket that shows up midsprint in a column other than New
+NIP_COLS = PUNT_COLS[1:]
+# any outgoing column
+OUT_COLS = COLS
 
 # sprint length, in weeks
 DEFAULT_SPRINT_LEN = 2
@@ -246,7 +256,7 @@ class Sprint(NS1Base):
         board.client.fetch_json(
             '/boards/' + board.id + '/name',
             http_method='PUT',
-            post_args={'value': 'Current Sprint %s' % self.cur_sprint_id, }, )
+            post_args={'value': 'Engineering: Current Sprint %s' % self.cur_sprint_id, }, )
 
         ## right shift sprint roadmap, bring into current sprint
         rm_board = Board(self.client, board_id=self.SPRINT_RM_BOARD_ID)
@@ -432,9 +442,8 @@ class Sprint(NS1Base):
         print " -- PUNTED/CARRYOVER"
 
         ### num punted from last sprint in various columns
-        punt_cols = ['New', 'Blocked', 'In Progress', 'Review', 'Pending']
         punt_counts = 0
-        for pc in punt_cols:
+        for pc in PUNT_COLS:
             if pc not in last_finish_map:
                 continue
             sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1 and
@@ -450,9 +459,8 @@ class Sprint(NS1Base):
         print " -- NEW, BUT ALREADY IN PROGRESS"
 
         ### num added to a column this sprint which wasn't in last sprint and skipped new
-        nip_cols = ['Blocked', 'In Progress', 'Review', 'Pending']
         nip_counts = 0
-        for pc in nip_cols:
+        for pc in NIP_COLS:
             if pc not in last_finish_map:
                 continue
             sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=1 and
@@ -473,9 +481,8 @@ class Sprint(NS1Base):
 
         # outgoing
         ### num in each column
-        out_cols = ['New', 'Blocked', 'In Progress', 'Review', 'Pending', TARGET_COL]
         out_counts = 0
-        for pc in out_cols:
+        for pc in OUT_COLS:
             sql = '''select count(*) from sprint_state where sprint_id=? and snapshot_phase=2 and list_id=?'''
             print "Outgoing: %s" % pc
             rc = self._report_count(sql, (sprint_id, self.list_ids[pc]))
